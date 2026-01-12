@@ -1,0 +1,79 @@
+2025-06-10 16:04:36,572 - MainApp - INFO - File logging initialized. Log file: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\assets\app_data\app_session.log
+2025-06-10 16:04:36,593 - MainApp - INFO - Application starting...
+2025-06-10 16:04:36,601 - UI_Module - INFO - Application window icon set successfully.
+2025-06-10 16:04:36,601 - UI_Module - INFO - Windows AppUserModelID set to: EnergyWaves.AntennaTesterApp.Tester.1
+2025-06-10 16:04:36,651 - UI_Module - INFO - UI: Restored test page splitter state successfully.
+2025-06-10 16:04:36,656 - MainApp - INFO - Attempting to load software configuration from: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\config\software_config.xlsx
+2025-06-10 16:04:36,656 - SoftwareConfigLoader - INFO - Attempting to load software configuration from: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\config\software_config.xlsx
+2025-06-10 16:04:36,910 - SoftwareConfigLoader - WARNING - Skipping row 7 in sheet 'Database' due to missing key.
+2025-06-10 16:04:36,911 - SoftwareConfigLoader - INFO - Successfully loaded configuration from C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\config\software_config.xlsx
+2025-06-10 16:04:36,911 - MainApp - INFO - Software configuration loaded successfully.
+2025-06-10 16:04:36,911 - MainApp - INFO - Loading additional parameters from software configuration...
+2025-06-10 16:04:36,911 - MainApp - INFO -   HardwareID_Gen: 13341
+2025-06-10 16:04:36,911 - MainApp - INFO -   HardwareID_Power_Meter: 2514001
+2025-06-10 16:04:36,911 - MainApp - INFO -   Power_Meter_Visa_Name: TCPIP0::127.0.0.1::59001::SOCKET
+2025-06-10 16:04:36,911 - MainApp - INFO -   HardwareID_Extension_Module: ABS44555
+2025-06-10 16:04:36,911 - MainApp - INFO -   Multiplexing_Factor: 6
+2025-06-10 16:04:36,911 - MainApp - INFO -   Transmitter_Power: 2.0 dBm
+2025-06-10 16:04:36,911 - MainApp - INFO -   Instrument_Settling_Time: 1.0 s
+2025-06-10 16:04:36,911 - MainApp - INFO -   Hardware_Demo (Hardware sheet): False
+2025-06-10 16:04:36,912 - MainApp - INFO -   OBDC_Driver: {ODBC Driver 18 for SQL Server}
+2025-06-10 16:04:36,912 - MainApp - INFO -   Server_Name (Database): Gain_Test
+2025-06-10 16:04:36,912 - MainApp - INFO -   Database_Name (Database): PL_MP_gaintest_dev
+2025-06-10 16:04:36,912 - MainApp - INFO -   User_ID (Database): User1
+2025-06-10 16:04:36,912 - MainApp - INFO -   Database_Password (Database): Loaded
+2025-06-10 16:04:36,912 - MainApp - INFO -   Optional_Parameters (Database): TrustServerCertificate=yes;
+2025-06-10 16:04:36,912 - MainApp - INFO -   Database_Demo (Database sheet): True
+2025-06-10 16:04:36,912 - MainApp - INFO - Database Demo Mode is ON. Skipping database service initialization.
+2025-06-10 16:04:36,912 - MainApp - INFO - Persistent Memory Enabled: False
+2025-06-10 16:04:36,912 - MainApp - INFO - Recalibration time set from software config: 1:00:00
+2025-06-10 16:04:36,912 - MainApp - INFO - Hardware Demo Mode is configured as OFF. Attempting to initialize real instruments.
+2025-06-10 16:04:36,912 - MainApp - INFO - Initializing hardware instruments...
+2025-06-10 16:04:36,912 - MainApp - INFO - Initializing Signal Generator (Vaunix LMS163)...
+2025-06-10 16:04:36,927 - LMS163Controller - INFO - LMS163Controller initialized (test mode: False)
+2025-06-10 16:04:36,928 - LMS163Controller - INFO - Found 0 device(s)
+2025-06-10 16:04:36,928 - MainApp - ERROR - No Vaunix LMS signal generator devices found.
+2025-06-10 16:04:36,928 - MainApp - CRITICAL - Hardware initialization failed. Application configured for production mode cannot continue.
+2025-06-10 16:04:37,036 - UI_Module - INFO - Applying Stylesheet (Dark Mode Effective: True)
+2025-06-10 16:04:37,070 - UI_Module - INFO - Configuring graph theme (Dark Effective: True) Background: #34495e
+2025-06-10 16:04:45,560 - UI_Module - INFO - Initial login cancelled or failed. Exiting.
+2025-06-10 16:04:46,821 - UI_Module - INFO - UI: Exit cancelled.
+2025-06-10 16:04:52,416 - MainApp - CRITICAL - Exiting application due to critical hardware failure during initialization in production mode.
+2025-06-10 16:29:41,297 - MainApp - INFO - File logging initialized. Log file: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\assets\app_data\app_session.log
+2025-06-10 16:29:41,315 - MainApp - INFO - Application starting...
+2025-06-10 16:29:41,324 - UI_Module - INFO - Application window icon set successfully.
+2025-06-10 16:29:41,324 - UI_Module - INFO - Windows AppUserModelID set to: EnergyWaves.AntennaTesterApp.Tester.1
+2025-06-10 16:29:41,373 - UI_Module - INFO - UI: Restored test page splitter state successfully.
+2025-06-10 16:29:41,377 - MainApp - INFO - Attempting to load software configuration from: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\config\software_config.xlsx
+2025-06-10 16:29:41,378 - SoftwareConfigLoader - INFO - Attempting to load software configuration from: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\config\software_config.xlsx
+2025-06-10 16:29:41,624 - SoftwareConfigLoader - WARNING - Skipping row 7 in sheet 'Database' due to missing key.
+2025-06-10 16:29:41,624 - SoftwareConfigLoader - INFO - Successfully loaded configuration from C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest\config\software_config.xlsx
+2025-06-10 16:29:41,625 - MainApp - INFO - Software configuration loaded successfully.
+2025-06-10 16:29:41,625 - MainApp - INFO - Loading additional parameters from software configuration...
+2025-06-10 16:29:41,625 - MainApp - INFO -   HardwareID_Gen: 13341
+2025-06-10 16:29:41,625 - MainApp - INFO -   HardwareID_Power_Meter: 2514001
+2025-06-10 16:29:41,625 - MainApp - INFO -   Power_Meter_Visa_Name: TCPIP0::127.0.0.1::59001::SOCKET
+2025-06-10 16:29:41,625 - MainApp - INFO -   HardwareID_Extension_Module: ABS44555
+2025-06-10 16:29:41,625 - MainApp - INFO -   Multiplexing_Factor: 6
+2025-06-10 16:29:41,625 - MainApp - INFO -   Transmitter_Power: 2.0 dBm
+2025-06-10 16:29:41,625 - MainApp - INFO -   Instrument_Settling_Time: 1.0 s
+2025-06-10 16:29:41,627 - MainApp - INFO -   Hardware_Demo (Hardware sheet): False
+2025-06-10 16:29:41,627 - MainApp - INFO -   OBDC_Driver: {ODBC Driver 18 for SQL Server}
+2025-06-10 16:29:41,627 - MainApp - INFO -   Server_Name (Database): Gain_Test
+2025-06-10 16:29:41,627 - MainApp - INFO -   Database_Name (Database): PL_MP_gaintest_dev
+2025-06-10 16:29:41,627 - MainApp - INFO -   User_ID (Database): User1
+2025-06-10 16:29:41,627 - MainApp - INFO -   Database_Password (Database): Loaded
+2025-06-10 16:29:41,627 - MainApp - INFO -   Optional_Parameters (Database): TrustServerCertificate=yes;
+2025-06-10 16:29:41,627 - MainApp - INFO -   Database_Demo (Database sheet): True
+2025-06-10 16:29:41,627 - MainApp - INFO - Database Demo Mode is ON. Skipping database service initialization.
+2025-06-10 16:29:41,627 - MainApp - INFO - Persistent Memory Enabled: False
+2025-06-10 16:29:41,628 - MainApp - INFO - Recalibration time set from software config: 1:00:00
+2025-06-10 16:29:41,628 - MainApp - INFO - Hardware Demo Mode is configured as OFF. Attempting to initialize real instruments.
+2025-06-10 16:29:41,628 - MainApp - INFO - Initializing hardware instruments...
+2025-06-10 16:29:41,628 - MainApp - INFO - Initializing Signal Generator (Vaunix LMS163)...
+2025-06-10 16:29:41,652 - LMS163Controller - INFO - LMS163Controller initialized (test mode: False)
+2025-06-10 16:29:41,653 - LMS163Controller - INFO - Found 0 device(s)
+2025-06-10 16:29:41,653 - MainApp - ERROR - No Vaunix LMS signal generator devices found.
+2025-06-10 16:29:41,654 - MainApp - CRITICAL - Hardware initialization failed. Application configured for production mode cannot continue.
+2025-06-10 16:29:41,762 - UI_Module - INFO - Applying Stylesheet (Dark Mode Effective: True)
+2025-06-10 16:29:41,788 - UI_Module - INFO - Configuring graph theme (Dark Effective: True) Background: #34495e

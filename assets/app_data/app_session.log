@@ -1,0 +1,70 @@
+2026-01-09 18:38:48,299 - MainApp - INFO - File logging initialized. Log file: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest_Release\assets\app_data\app_session.log
+2026-01-09 18:38:48,365 - MainApp - INFO - Application starting...
+2026-01-09 18:38:48,420 - UI_Module - INFO - Application window icon set successfully.
+2026-01-09 18:38:48,429 - UI_Module - INFO - Windows AppUserModelID set to: EnergyWaves.AntennaTesterApp.Tester.1
+2026-01-09 18:38:48,624 - UI_Module - INFO - UI: Restored test page splitter state successfully.
+2026-01-09 18:38:48,651 - MainApp - INFO - Found software configuration file: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest_Release\config\software_config.xls
+2026-01-09 18:38:48,651 - SoftwareConfigLoader - INFO - Attempting to load software configuration from: C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest_Release\config\software_config.xls
+2026-01-09 18:38:48,776 - SoftwareConfigLoader - DEBUG - Found sheets: ['Hardware', 'Database']
+2026-01-09 18:38:48,778 - SoftwareConfigLoader - DEBUG - Attempting to parse sheet: 'Hardware'
+2026-01-09 18:38:48,812 - SoftwareConfigLoader - DEBUG -   Loaded: HardwareID_Gen = 13341 (Type: int)
+2026-01-09 18:38:48,823 - SoftwareConfigLoader - DEBUG -   Loaded: HardwareID_Power_Meter = 2514001 (Type: int)
+2026-01-09 18:38:48,829 - SoftwareConfigLoader - DEBUG -   Loaded: Power_Meter_Visa_Name = TCPIP0::127.0.0.1::59001::SOCKET (Type: str)
+2026-01-09 18:38:48,830 - SoftwareConfigLoader - DEBUG -   Loaded: HardwareID_Extension_Module = ABS44555 (Type: str)
+2026-01-09 18:38:48,830 - SoftwareConfigLoader - DEBUG -   Loaded: Multiplexing_Factor = 6 (Type: int)
+2026-01-09 18:38:48,831 - SoftwareConfigLoader - DEBUG -   Loaded: Transmitter_Power = 8 (Type: int)
+2026-01-09 18:38:48,832 - SoftwareConfigLoader - DEBUG -   Loaded: Anritsu_bandwidth_mhz = 0.2 (Type: str)
+2026-01-09 18:38:48,836 - SoftwareConfigLoader - DEBUG -   Loaded: Anritsu_averaging = 10 (Type: int)
+2026-01-09 18:38:48,838 - SoftwareConfigLoader - DEBUG -   Loaded: Recalibration_Time = 60 (Type: int)
+2026-01-09 18:38:48,841 - SoftwareConfigLoader - DEBUG -   Loaded: Instrument_Settling_Time = 1 (Type: int)
+2026-01-09 18:38:48,845 - SoftwareConfigLoader - DEBUG -   Loaded: Hardware_Demo = 1 (Type: int)
+2026-01-09 18:38:48,845 - SoftwareConfigLoader - DEBUG - Attempting to parse sheet: 'Database'
+2026-01-09 18:38:48,846 - SoftwareConfigLoader - DEBUG -   Loaded: OBDC_Driver = {ODBC Driver 18 for SQL Server} (Type: str)
+2026-01-09 18:38:48,846 - SoftwareConfigLoader - DEBUG -   Loaded: Server_Name = PLGDS9247.emea.hubersuhner.net (Type: str)
+2026-01-09 18:38:48,846 - SoftwareConfigLoader - DEBUG -   Loaded: Database_Name = PL_MP_gaintest_dev (Type: str)
+2026-01-09 18:38:48,847 - SoftwareConfigLoader - DEBUG -   Loaded: User_ID = uplmpgaintest_dev (Type: str)
+2026-01-09 18:38:48,847 - SoftwareConfigLoader - DEBUG -   Loaded: Database_Password = 82$2e5NmSy65L7S!5$T!d!77!!e (Type: str)
+2026-01-09 18:38:48,847 - SoftwareConfigLoader - DEBUG -   Loaded: Optional_Parameters = TrustServerCertificate=yes; (Type: str)
+2026-01-09 18:38:48,847 - SoftwareConfigLoader - WARNING - Skipping row 7 in sheet 'Database' due to missing key.
+2026-01-09 18:38:48,847 - SoftwareConfigLoader - DEBUG -   Loaded: Database_Demo = True (Type: bool)
+2026-01-09 18:38:48,848 - SoftwareConfigLoader - DEBUG -   Loaded: Persistent_Memory = False (Type: bool)
+2026-01-09 18:38:48,848 - SoftwareConfigLoader - INFO - Successfully loaded configuration from C:\Users\wellb\OneDrive\Projekty\Projekty\Programming\Antennatest_Release\config\software_config.xls
+2026-01-09 18:38:48,849 - MainApp - INFO - Software configuration loaded successfully.
+2026-01-09 18:38:48,849 - MainApp - INFO - Loading additional parameters from software configuration...
+2026-01-09 18:38:48,849 - MainApp - INFO -   HardwareID_Gen: 13341
+2026-01-09 18:38:48,850 - MainApp - INFO -   HardwareID_Power_Meter: 2514001
+2026-01-09 18:38:48,850 - MainApp - INFO -   Power_Meter_Visa_Name: TCPIP0::127.0.0.1::59001::SOCKET
+2026-01-09 18:38:48,850 - MainApp - INFO -   HardwareID_Extension_Module: ABS44555
+2026-01-09 18:38:48,850 - MainApp - INFO -   Multiplexing_Factor: 6
+2026-01-09 18:38:48,850 - MainApp - INFO -   Transmitter_Power: 8.0 dBm
+2026-01-09 18:38:48,851 - MainApp - INFO -   Instrument_Settling_Time: 1.0 s
+2026-01-09 18:38:48,851 - MainApp - INFO -   Anritsu_bandwidth_mhz: 0.2 MHz
+2026-01-09 18:38:48,851 - MainApp - INFO -   Anritsu_averaging: 10 (Enabled)
+2026-01-09 18:38:48,851 - MainApp - INFO -   Hardware_Demo (Hardware sheet): True
+2026-01-09 18:38:48,851 - MainApp - INFO -   OBDC_Driver: {ODBC Driver 18 for SQL Server}
+2026-01-09 18:38:48,851 - MainApp - INFO -   Server_Name (Database): PLGDS9247.emea.hubersuhner.net
+2026-01-09 18:38:48,851 - MainApp - INFO -   Database_Name (Database): PL_MP_gaintest_dev
+2026-01-09 18:38:48,852 - MainApp - INFO -   User_ID (Database): uplmpgaintest_dev
+2026-01-09 18:38:48,852 - MainApp - INFO -   Database_Password (Database): Loaded
+2026-01-09 18:38:48,852 - MainApp - INFO -   Optional_Parameters (Database): TrustServerCertificate=yes;
+2026-01-09 18:38:48,852 - MainApp - INFO -   Database_Demo (Database sheet): True
+2026-01-09 18:38:48,852 - MainApp - INFO - Database Demo Mode is ON. Skipping database service initialization.
+2026-01-09 18:38:48,852 - MainApp - INFO - Persistent Memory Enabled: False
+2026-01-09 18:38:48,852 - MainApp - INFO - Recalibration time set from software config: 1:00:00
+2026-01-09 18:38:48,852 - MainApp - INFO - Hardware Demo Mode is ON as per configuration. Measurements will be simulated.
+2026-01-09 18:38:48,852 - MainApp - INFO - Database Demo Mode is ON as per configuration/fallback.
+2026-01-09 18:38:48,852 - MainApp - INFO - Persistent memory is disabled by configuration. Skipping load of persistent data.
+2026-01-09 18:38:48,961 - MainApp - INFO - Main window shown.
+2026-01-09 18:38:49,035 - UI_Module - INFO - Applying Stylesheet (Dark Mode Effective: True)
+2026-01-09 18:38:49,079 - UI_Module - INFO - Configuring graph theme (Dark Effective: True) Background: #34495e
+2026-01-09 18:38:50,703 - UI_Module - INFO - Initial login cancelled or failed. Exiting.
+2026-01-09 18:38:59,522 - UI_Module - INFO - UI: Exit confirmed.
+2026-01-09 18:38:59,522 - MainApp - INFO - App: Received request to cleanup and exit application.
+2026-01-09 18:38:59,522 - MainApp - INFO - Persistent memory is disabled by configuration. Skipping save of persistent data.
+2026-01-09 18:38:59,522 - MainApp - INFO - Shutting down hardware instruments...
+2026-01-09 18:38:59,522 - MainApp - INFO - Hardware shutdown complete.
+2026-01-09 18:38:59,522 - MainApp - INFO - Persistent data saved (if enabled). Hardware shutdown. Application will now quit.
+2026-01-09 18:38:59,533 - MainApp - INFO - Ensuring hardware shutdown before final exit (if not already handled by cleanup_and_exit)...
+2026-01-09 18:38:59,534 - MainApp - INFO - Shutting down hardware instruments...
+2026-01-09 18:38:59,534 - MainApp - INFO - Hardware shutdown complete.
+2026-01-09 18:38:59,534 - MainApp - INFO - Application exiting with code 0.

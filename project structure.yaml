@@ -1,0 +1,35 @@
+project_root/
+|-- main_app.py                   # Entry script
+|-- src/
+|   |-- ui/                       # UI components
+|   |   |-- __init__.py           # Package initializer
+|   |   |-- ui_module.py          # Main UI module
+|   |   |-- user_management.py    # User credential handling
+|   |   |-- users.enc             # User credentials
+|   |-- loaders/                  # Configuration loaders
+|   |   |-- __init__.py           # Package initializer
+|   |   |-- software_config_loader.py
+|   |   |-- antenna_config_loader.py
+|   |-- database/                 # Database batch service
+|   |   |-- __init__.py
+|   |   |-- database_handling.py
+|   |-- instruments/              # Hardware interfaces
+|   |   |-- __init__.py
+|   |   |-- Anritsu_MA24510A.py
+|   |   |-- Vaunix_LMS163_DSG.py
+|-- config/
+|   |-- software_config.xlsx      # Software settings
+|   |-- antenna_config_files/     # Antenna specs
+|   |   |-- ARS620 B3.xlsx
+|   |   |-- KLEDAR SRR.xlsx
+|   |   |-- SRR620 B3.xlsx
+|   |   |-- uBoard Ma C2.xlsx
+|   |   |-- uBoard Md C2.xlsx
+|-- tests/
+|   |-- test_software_config_loader.py  # Unit tests
+|-- assets/                       # Static assets (icons, images)
+|   |-- app_data/   
+|   |-- icons/ 
+|-- Documentation/                # Design docs and data dictionaries
+|-- README.md                     # Project documentation
+|-- requirements.txt              # Project dependencies
