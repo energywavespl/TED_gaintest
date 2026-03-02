@@ -9,8 +9,13 @@ from typing import Optional, Dict, List, Any, Set
 import pandas as pd
 import time # Added for hardware settling time
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog
-from PySide6.QtCore import QObject, Slot, QTimer, Signal
+from PySide6.QtWidgets import (
+    QApplication, QMessageBox, QInputDialog  
+)
+from PySide6.QtCore import (
+    QTimer, Slot, QObject, QThread 
+)
+from src.workers.measurement_worker import MeasurementWorker
 
 # Import the main UI window class from your ui_module
 # Assuming ui_module.py is in src/ui/
@@ -36,7 +41,7 @@ from src.database.database_handling import (
 # These constants are used by QApplication.setOrganizationName and setApplicationName.
 COMPANY_NAME = "Energy Waves"
 APP_NAME_FOR_SETTINGS = "AntennaTesterApp"
-APP_VERSION = "1.8" 
+APP_VERSION = "1.9" 
  
 # --- Path Definitions ---
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -105,9 +110,13 @@ class DummyMainApp(QObject):
         super().__init__()
         self.ui = ui
         self.antenna_data: Dict = {}
-        self.current_measurement_timer: Optional[QTimer] = None
+        self.current_measurement_timer: Optional[QTimer] = None  # Legacy, kept for compatibility
         self.freq_index: int = 0
         self._simulated_results: List[Dict] = [] # Used for both simulated and real measurement results storage
+
+        # Worker thread for background measurements
+        self._worker_thread: Optional[QThread] = None
+        self._measurement_worker: Optional[MeasurementWorker] = None
 
         self.ports_available_for_orientation: List[str] = []
         self.ports_selected_by_user: List[str] = []
@@ -623,7 +632,7 @@ class DummyMainApp(QObject):
             if not (self.power_meter and self.power_meter.connected): # Check both instance and connected flag
                 logger.error(f"Failed to connect to Power Meter at {self.power_meter_visa_name} (auto_connect failed).")
                 self.power_meter = None
-                self._shutdown_hardware()
+                self._shutdown_hardware() 
                 return
             
             logger.info(f"Connected to Power Meter: {self.power_meter.get_instrument_info().get('idn', 'N/A')}")
@@ -875,6 +884,7 @@ class DummyMainApp(QObject):
         self.ui.antenna_sn_scan_received.connect(self.validate_antenna_sn)
         self.ui.retry_test_confirmed.connect(self.handle_retry_test) # For UI's "SN already tested" dialog
         self.ui.request_retest_failed_unit.connect(self.handle_request_retest_failed_unit) # For retesting a failed unit
+        self.ui.request_redo_golden.connect(self.handle_request_redo_golden) # For re-doing golden after silver fail
         self.ui.start_antenna_test_for_port.connect(self.do_antenna_measurement)
         self.ui.port_batch_run_complete.connect(self.handle_port_batch_complete)
         self.ui.request_test_next_port.connect(self.handle_request_test_next_port)
@@ -1103,89 +1113,251 @@ class DummyMainApp(QObject):
 
         self.ui.progress_bar.setMaximum(num_freq_points)
         self.ui.progress_bar.setValue(0)
-        self.freq_index = 0
-        self._simulated_results = [] 
+        self._simulated_results = []
         self.ui._test_running = True
 
-        if self.current_measurement_timer and self.current_measurement_timer.isActive():
-            self.current_measurement_timer.stop()
-        self.current_measurement_timer = QTimer(self)
-        self.current_measurement_timer.timeout.connect(self._perform_golden_measurement_step)
-        interval = 50 if self.hardware_demo_mode else 200 
-        self.current_measurement_timer.start(interval)
+        self._start_measurement_worker(
+            "golden",
+            port_name=port_name,
+            limits_for_port=limits_for_port
+        )
 
-    def _perform_golden_measurement_step(self):
+    # --- Worker Infrastructure ---
+
+    def _start_measurement_worker(self, measurement_type: str, port_name: str,
+                                   limits_for_port: List, golden_meas_list: List = None,
+                                   serial_number: str = None):
+        """Creates and starts a MeasurementWorker in a background QThread."""
+        # Clean up any previous worker
+        self._cleanup_worker_thread()
+
+        worker = MeasurementWorker()
+        thread = QThread()
+
+        # Configure the worker based on measurement type
+        hw_ready = self._is_hardware_ready()
+        if measurement_type == "golden":
+            worker.configure_golden(
+                port_name=port_name,
+                limits_for_port=limits_for_port,
+                signal_generator=self.signal_generator_device,
+                power_meter=self.power_meter,
+                hardware_ready=hw_ready,
+                hardware_demo_mode=self.hardware_demo_mode,
+                instrument_settling_time_s=self.instrument_settling_time_s,
+                transmitter_power=self.transmitter_power,
+                multiplexing_factor=self.multiplexing_factor
+            )
+        elif measurement_type == "silver":
+            worker.configure_silver(
+                port_name=port_name,
+                limits_for_port=limits_for_port,
+                golden_meas_list=golden_meas_list,
+                signal_generator=self.signal_generator_device,
+                power_meter=self.power_meter,
+                hardware_ready=hw_ready,
+                hardware_demo_mode=self.hardware_demo_mode,
+                instrument_settling_time_s=self.instrument_settling_time_s,
+                transmitter_power=self.transmitter_power,
+                multiplexing_factor=self.multiplexing_factor
+            )
+        elif measurement_type == "antenna":
+            worker.configure_antenna(
+                port_name=port_name,
+                serial_number=serial_number,
+                limits_for_port=limits_for_port,
+                golden_meas_list=golden_meas_list,
+                signal_generator=self.signal_generator_device,
+                power_meter=self.power_meter,
+                hardware_ready=hw_ready,
+                hardware_demo_mode=self.hardware_demo_mode,
+                instrument_settling_time_s=self.instrument_settling_time_s,
+                transmitter_power=self.transmitter_power,
+                multiplexing_factor=self.multiplexing_factor
+            )
+
+        worker.moveToThread(thread)
+
+        # Connect signals
+        thread.started.connect(worker.run)
+        worker.progress_updated.connect(self._on_measurement_progress)
+        worker.measurement_completed.connect(self._on_measurement_completed)
+        worker.error_occurred.connect(self._on_worker_error)
+        worker.finished.connect(self._on_worker_finished)
+        # NOTE: Do NOT use deleteLater here. In simulation mode the worker finishes
+        # almost instantly and deleteLater would destroy C++ objects before the main
+        # thread processes the queued cross-thread signals, causing a crash.
+        # Cleanup is handled by _on_worker_finished clearing our references.
+
+        self._measurement_worker = worker
+        self._worker_thread = thread
+
+        logger.info(f"Starting {measurement_type} measurement worker thread for port {port_name}")
+        thread.start()
+
+    @Slot(int, object)
+    def _on_measurement_progress(self, freq_index: int, step_data: dict):
+        """Called from worker thread via signal for each completed frequency point."""
+        self._simulated_results.append(step_data)
+
+        if self.ui.stacked_widget.currentWidget() == self.ui.test_page:
+            self.ui.progress_bar.setValue(freq_index + 1)
+
+            # For silver and antenna measurements, update the measurement graph
+            if "Antenna_Gain" in step_data and "Lower_Limit" in step_data:
+                self.ui.update_measurement_progress(
+                    freq_index,
+                    step_data.get("Frequency_GHz", 0),
+                    step_data.get("Antenna_Gain", float('nan')),
+                    step_data.get("Lower_Limit", float('nan')),
+                    step_data.get("Upper_Limit", float('nan'))
+                )
+
+    @Slot(str, object)
+    def _on_measurement_completed(self, measurement_type: str, results: list):
+        """Called when a measurement loop finishes all frequency points successfully."""
+        self.ui._test_running = False
         port_name = self.current_processing_port
-        if not port_name or not self.antenna_data:
-            if self.current_measurement_timer: self.current_measurement_timer.stop()
-            self.ui._test_running = False
-            logger.error("Golden measurement step: Port name or antenna data missing.")
-            return
 
-        limits_for_port = self.antenna_data.get("limits", {}).get(port_name, [])
-        num_freq_points = len(limits_for_port)
+        if measurement_type == "golden":
+            self._handle_golden_completed(port_name, results)
+        elif measurement_type == "silver":
+            self._handle_silver_completed(port_name, results)
+        elif measurement_type == "antenna":
+            self._handle_antenna_completed(port_name, results)
 
-        if self.freq_index < num_freq_points:
-            target_freq_ghz = limits_for_port[self.freq_index][0]
-            measured_power_dbm: Optional[float] = None
+    def _handle_golden_completed(self, port_name: str, results: list):
+        """Processes completed golden measurement results."""
+        logger.info(f"App: Golden measurement complete for Port {port_name}")
 
-            if not self._is_hardware_ready(): 
-                logger.debug(f"Golden (Sim) Freq Idx: {self.freq_index}, Target Freq: {target_freq_ghz} GHz")
-                measured_power_dbm = -1.5 + random.uniform(-0.2, 0.2) - (self.freq_index * (0.5 / max(1, num_freq_points)))
-            else: 
-                logger.debug(f"Golden (HW) Freq Idx: {self.freq_index}, Target Freq: {target_freq_ghz} GHz")
-                try:
-                    generator_freq_mhz = (target_freq_ghz * 1000) / self.multiplexing_factor
-                    
-                    logger.info(f"  Setting Gen: Freq={generator_freq_mhz:.4f} MHz, Pwr={self.transmitter_power} dBm")
-                    if not self.signal_generator_device.set_frequency(generator_freq_mhz):
-                         raise Exception(f"Failed to set generator frequency to {generator_freq_mhz} MHz")
-                    if not self.signal_generator_device.set_power(self.transmitter_power): 
-                         raise Exception(f"Failed to set generator power to {self.transmitter_power} dBm")
-                    
-                    logger.info(f"  Setting PM: Freq={target_freq_ghz} GHz") 
-                    if not self.power_meter.set_frequency(target_freq_ghz):
-                        raise Exception(f"Failed to set power meter frequency to {target_freq_ghz} GHz")
-                    
-                    self.signal_generator_device.rf_on()
-                    time.sleep(self.instrument_settling_time_s) 
+        if "golden_measurements" not in self.antenna_data:
+            self.antenna_data["golden_measurements"] = {}
 
-                    measured_power_dbm = self.power_meter.measure_power(wait_time=0.5) 
-                    
-                except Exception as e:
-                    self._handle_hardware_error("Golden Measurement Step", e, port_name=port_name)
-                    return 
-                finally:
-                    if self.signal_generator_device and self.signal_generator_device.is_rf_on:
-                        self.signal_generator_device.rf_off()
-                        logger.info("  Gen RF OFF")
-                
-                if measured_power_dbm is None: 
-                    logger.error(f"Power meter returned None for Golden measurement at {target_freq_ghz} GHz.")
-                    self._handle_hardware_error("Golden Measurement (No PM Value)", Exception("Power Meter returned no value"), port_name=port_name)
-                    return
+        self.antenna_data["golden_measurements"][port_name] = [res["Antenna_Measurement"] for res in results]
+        logger.info(f"App: Stored {len(results)} Golden dBm values for {port_name}.")
 
+        self.ui.report_golden_measurement_complete(port_name, success=True)
 
-            self._simulated_results.append({"Antenna_Measurement": measured_power_dbm}) 
+    def _handle_silver_completed(self, port_name: str, results: list):
+        """Processes completed silver measurement results."""
+        logger.info(f"App: Silver measurement complete for Port {port_name}")
 
-            if self.ui.stacked_widget.currentWidget() == self.ui.test_page:
-                 self.ui.progress_bar.setValue(self.freq_index + 1)
+        overall_silver_status = "PASS"
+        fail_details_text = []
+        for res_item in results:
+            if res_item.get("Pass") != "PASS":
+                overall_silver_status = "FAIL"
+                fail_details_text.append(
+                    f"  Freq {res_item.get('Frequency_GHz', 'N/A')} GHz: "
+                    f"Measured Silver Gain {res_item.get('Antenna_Gain', float('nan')):.2f} dBi "
+                    f"(Validation Limits: {res_item.get('Lower_Limit', float('nan')):.2f} / {res_item.get('Upper_Limit', float('nan')):.2f} dBi)"
+                )
 
-            self.freq_index += 1
-        else: 
-            if self.current_measurement_timer:
-                self.current_measurement_timer.stop()
-            self.current_measurement_timer = None
-            self.ui._test_running = False
-            logger.info(f"App: Golden measurement {'simulation' if self.hardware_demo_mode or not self.hardware_initialized_successfully else 'hardware test'} complete for Port {port_name}")
+        silver_sn_for_report = self.current_silver_sn_validated if self.current_silver_sn_validated else "UNKNOWN_SILVER_SN"
+        self._save_test_results_to_db(
+            port_name=port_name,
+            serial_number=silver_sn_for_report,
+            results_list=results,
+            overall_status=overall_silver_status,
+            is_silver_test=True,
+            is_retry_no_count=False
+        )
 
-            if "golden_measurements" not in self.antenna_data:
-                self.antenna_data["golden_measurements"] = {}
+        test_passed_successfully = (overall_silver_status == "PASS")
+        message_to_ui = "\n".join(fail_details_text) if not test_passed_successfully else "Silver Sample calibration passed successfully."
 
-            self.antenna_data["golden_measurements"][port_name] = [res["Antenna_Measurement"] for res in self._simulated_results]
-            logger.info(f"App: Stored {len(self._simulated_results)} Golden dBm values for {port_name}.")
+        new_measurement_id = self.measurement_id_counter
+        self.measurement_id_counter += 1
 
-            self.ui.report_golden_measurement_complete(port_name, success=True)
+        self.ui.report_silver_measurement_complete(
+            port_name=port_name,
+            success=test_passed_successfully,
+            message=message_to_ui,
+            silver_sn=silver_sn_for_report,
+            measurement_id=new_measurement_id,
+            silver_results=results
+        )
+
+    def _handle_antenna_completed(self, port_name: str, results: list):
+        """Processes completed antenna/DUT measurement results."""
+        serial_number = self.current_antenna_sn
+        logger.info(f"App: DUT Measurement complete for SN '{serial_number}', Port '{port_name}'")
+
+        overall_port_pass_status = "PASS" if all(res["Pass"] == "PASS" for res in results) else "FAIL"
+        retry_flag_value_for_report = self.is_current_test_a_no_count_retry
+
+        self._save_test_results_to_db(
+            port_name=port_name,
+            serial_number=serial_number,
+            results_list=results,
+            overall_status=overall_port_pass_status,
+            is_silver_test=False,
+            is_retry_no_count=retry_flag_value_for_report
+        )
+
+        if self.is_current_test_a_no_count_retry:
+            logger.info(f"App: Resetting is_current_test_a_no_count_retry flag after retest of {serial_number}.")
+            self.is_current_test_a_no_count_retry = False
+
+        if self.current_antenna_key and serial_number:
+            persistence_key_tuple = (self.current_antenna_key, port_name)
+            if persistence_key_tuple not in self.tested_sns_persistent:
+                self.tested_sns_persistent[persistence_key_tuple] = set()
+            if serial_number not in self.tested_sns_persistent[persistence_key_tuple]:
+                self.tested_sns_persistent[persistence_key_tuple].add(serial_number)
+                logger.info(f"App: Added SN '{serial_number}' to persistent set for {persistence_key_tuple}. "
+                           f"Total: {len(self.tested_sns_persistent[persistence_key_tuple])}")
+            else:
+                logger.info(f"App: SN '{serial_number}' already in persistent set for {persistence_key_tuple}.")
+        else:
+            logger.warning("current_antenna_key or serial_number not set. Cannot update tested_sns_persistent.")
+
+        new_measurement_id_for_dut = self.measurement_id_counter
+        self.measurement_id_counter += 1
+
+        failure_details_msg = ""
+        if overall_port_pass_status == "FAIL":
+            fail_details = []
+            for res_item in results:
+                if res_item.get("Pass") != "PASS":
+                    fail_details.append(
+                        f"  Freq {res_item.get('Frequency_GHz', 'N/A')} GHz: "
+                        f"Measured Gain {res_item.get('Antenna_Gain', float('nan')):.2f} dBi "
+                        f"(Limits: {res_item.get('Lower_Limit', float('nan')):.2f} / {res_item.get('Upper_Limit', float('nan')):.2f} dBi)"
+                    )
+            failure_details_msg = "\n".join(fail_details)
+
+        self.ui.report_port_test_complete_for_antenna(
+            port_name=port_name,
+            serial_number=serial_number,
+            results=results,
+            overall_port_status=overall_port_pass_status,
+            measurement_id=new_measurement_id_for_dut,
+            is_retry_no_count=retry_flag_value_for_report,
+            failure_details_message=failure_details_msg
+        )
+
+    @Slot(str, str)
+    def _on_worker_error(self, operation: str, error_message: str):
+        """Called when the worker encounters a hardware error."""
+        logger.error(f"Worker error during '{operation}': {error_message}")
+        self.ui._test_running = False
+        self._handle_hardware_error(
+            operation,
+            Exception(error_message),
+            port_name=self.current_processing_port,
+            sn=self.current_antenna_sn
+        )
+
+    @Slot()
+    def _on_worker_finished(self):
+        """Called when the worker thread finishes (success, error, or abort)."""
+        logger.info("Measurement worker finished.")
+        if self._worker_thread:
+            self._worker_thread.quit()   # Tell thread event loop to stop
+            self._worker_thread.wait()   # Wait for it to actually stop
+        self._measurement_worker = None
+        self._worker_thread = None
 
 
     @Slot(str, str)
@@ -1251,163 +1423,17 @@ class DummyMainApp(QObject):
 
         self.ui.progress_bar.setMaximum(num_freq_points)
         self.ui.progress_bar.setValue(0)
-        self.freq_index = 0
         self._simulated_results = []
         self.ui._test_running = True
 
-        if self.current_measurement_timer and self.current_measurement_timer.isActive():
-            self.current_measurement_timer.stop()
-        self.current_measurement_timer = QTimer(self)
-        self.current_measurement_timer.timeout.connect(self._perform_silver_measurement_step)
-        interval = 50 if self.hardware_demo_mode else 200
-        self.current_measurement_timer.start(interval)
+        self._start_measurement_worker(
+            "silver",
+            port_name=port_name,
+            limits_for_port=limits_for_port,
+            golden_meas_list=golden_meas_list
+        )
 
-    def _perform_silver_measurement_step(self):
-        port_name = self.current_processing_port
-        if not self.ui._test_running or not port_name or not self.antenna_data:
-            logger.warning(f"Silver measurement step called in invalid state (Running: {self.ui._test_running}, Port: {port_name}). Aborting step.")
-            if self.current_measurement_timer: self.current_measurement_timer.stop()
-            self.current_measurement_timer = None
-            self.ui._test_running = False
-            return
 
-        limits_for_port = self.antenna_data.get("limits", {}).get(port_name, [])
-        num_freq_points = len(limits_for_port)
-        golden_meas_list = self.antenna_data.get("golden_measurements", {}).get(port_name, []) # These are actual (or sim) power readings
-
-        if self.freq_index < num_freq_points:
-            current_limit_data = limits_for_port[self.freq_index]
-            target_freq_ghz = current_limit_data[0]
-            spec_gain_golden_val = current_limit_data[3] # Spec_Gain_Horn
-            silver_gain_horn_target = current_limit_data[4] # Target gain for Silver sample
-            silver_tolerance_pm = current_limit_data[5] # Tolerance for Silver sample gain validation
-
-            golden_meas_dbm_val = golden_meas_list[self.freq_index] # Actual power meter reading for golden sample setup
-            if golden_meas_dbm_val is None: # Check if golden measurement was valid
-                logger.error(f"Missing Golden measurement data point for Silver test at Freq Index {self.freq_index}, Port {port_name}. Aborting Silver test.")
-                if self.current_measurement_timer: self.current_measurement_timer.stop()
-                self.ui._test_running = False
-                QMessageBox.critical(self.ui, "Data Error", "Golden measurement data point missing. Please re-run Golden Sample measurement.")
-                self.ui.go_to_state("ScanGoldenSN")
-                return
-
-            instrument_reading_for_silver_dbm: Optional[float] = None
-            actual_measured_silver_gain: Optional[float] = None
-
-            if not self._is_hardware_ready(): # Simulation for Silver
-                logger.debug(f"Silver (Sim) Freq Idx: {self.freq_index}, Target Freq: {target_freq_ghz} GHz")
-                fail_silver_point_prob = 0.02 # Sim params
-                simulated_silver_deviation_from_target = random.uniform(-silver_tolerance_pm * 0.8, silver_tolerance_pm * 0.8)
-                if random.random() < fail_silver_point_prob:
-                     simulated_silver_deviation_from_target = silver_tolerance_pm * random.choice([-1.2, 1.2])
-                actual_measured_silver_gain = silver_gain_horn_target + simulated_silver_deviation_from_target
-                # Back-calculate what the instrument would read for this simulated gain
-                # CORRECTED CALCULATION (for simulation consistency, though the primary fix is below)
-                instrument_reading_for_silver_dbm = golden_meas_dbm_val + (actual_measured_silver_gain - spec_gain_golden_val)
-            else: # Real hardware for Silver
-                logger.debug(f"Silver (HW) Freq Idx: {self.freq_index}, Target Freq: {target_freq_ghz} GHz")
-                try:
-                    generator_freq_mhz = (target_freq_ghz * 1000) / self.multiplexing_factor
-                    
-                    logger.info(f"  Setting Gen: Freq={generator_freq_mhz:.4f} MHz, Pwr={self.transmitter_power} dBm")
-                    if not self.signal_generator_device.set_frequency(generator_freq_mhz):
-                        raise Exception(f"Failed to set generator frequency to {generator_freq_mhz} MHz")
-                    if not self.signal_generator_device.set_power(self.transmitter_power):
-                        raise Exception(f"Failed to set generator power to {self.transmitter_power} dBm")
-
-                    logger.info(f"  Setting PM: Freq={target_freq_ghz} GHz")
-                    if not self.power_meter.set_frequency(target_freq_ghz):
-                         raise Exception(f"Failed to set power meter frequency to {target_freq_ghz} GHz")
-                    
-                    self.signal_generator_device.rf_on()
-                    time.sleep(self.instrument_settling_time_s)
-
-                    instrument_reading_for_silver_dbm = self.power_meter.measure_power(wait_time=0.5)
-                    
-                    if instrument_reading_for_silver_dbm is None:
-                        raise Exception("Power meter returned None for Silver measurement.")
-                    
-                    # Calculate actual Silver gain based on real readings
-                    # --- THIS IS THE CORRECTED CALCULATION ---
-                    actual_measured_silver_gain = spec_gain_golden_val + (instrument_reading_for_silver_dbm - golden_meas_dbm_val)
-
-                except Exception as e:
-                    self._handle_hardware_error("Silver Measurement Step", e, port_name=port_name)
-                    return
-                finally:
-                    if self.signal_generator_device and self.signal_generator_device.is_rf_on:
-                        self.signal_generator_device.rf_off()
-                        logger.info("  Gen RF OFF")
-
-            if instrument_reading_for_silver_dbm is None or actual_measured_silver_gain is None : # Should be caught by try-except for HW
-                logger.error(f"Failed to get valid reading for Silver at {target_freq_ghz} GHz. Aborting point.")
-                # This implies a logic error if not caught by hardware error handling, or sim issue
-                pass_status = "FAIL (Error)"
-            else:
-                silver_gain_validation_ll = silver_gain_horn_target - silver_tolerance_pm
-                silver_gain_validation_ul = silver_gain_horn_target + silver_tolerance_pm
-                pass_status = "PASS" if silver_gain_validation_ll <= actual_measured_silver_gain <= silver_gain_validation_ul else "FAIL"
-
-            self._simulated_results.append({
-                "Frequency_GHz": target_freq_ghz,
-                "Antenna_Gain": actual_measured_silver_gain if actual_measured_silver_gain is not None else float('nan'),
-                "Lower_Limit": silver_gain_validation_ll,
-                "Upper_Limit": silver_gain_validation_ul,
-                "Pass": pass_status,
-                "Antenna_Measurement": instrument_reading_for_silver_dbm if instrument_reading_for_silver_dbm is not None else float('nan'),
-                "Golden_Measurement": golden_meas_dbm_val,
-                "Spec_Gain_Displayed": silver_gain_horn_target 
-            })
-
-            if self.ui.stacked_widget.currentWidget() == self.ui.test_page:
-                self.ui.update_measurement_progress(self.freq_index, target_freq_ghz, 
-                                                    actual_measured_silver_gain if actual_measured_silver_gain is not None else float('nan'),
-                                                    silver_gain_validation_ll, silver_gain_validation_ul)
-            self.freq_index += 1
-        else: # All frequency points processed
-            if self.current_measurement_timer: self.current_measurement_timer.stop()
-            self.current_measurement_timer = None
-            self.ui._test_running = False
-            logger.info(f"App: Silver measurement {'simulation' if self.hardware_demo_mode or not self.hardware_initialized_successfully else 'hardware test'} complete for Port {port_name}")
-
-            overall_silver_status = "PASS"
-            fail_details_text = []
-            for res_item in self._simulated_results:
-                if res_item.get("Pass") != "PASS": 
-                    overall_silver_status = "FAIL"
-                    fail_details_text.append(
-                        f"  Freq {res_item.get('Frequency_GHz', 'N/A')} GHz: "
-                        f"Measured Silver Gain {res_item.get('Antenna_Gain', float('nan')):.2f} dBi "
-                        f"(Validation Limits: {res_item.get('Lower_Limit', float('nan')):.2f} / {res_item.get('Upper_Limit', float('nan')):.2f} dBi)"
-                    )
-            
-            # Save results to database if not in demo mode
-            silver_sn_for_report = self.current_silver_sn_validated if self.current_silver_sn_validated else "UNKNOWN_SILVER_SN"
-            self._save_test_results_to_db(
-                port_name=port_name,
-                serial_number=silver_sn_for_report,
-                results_list=self._simulated_results,
-                overall_status=overall_silver_status,
-                is_silver_test=True,
-                is_retry_no_count=False # Silver test is never a retry
-            )
-
-            test_passed_successfully = (overall_silver_status == "PASS")
-            message_to_ui = "\n".join(fail_details_text) if not test_passed_successfully else "Silver Sample calibration passed successfully."
-            
-            new_measurement_id = self.measurement_id_counter
-            self.measurement_id_counter += 1
-
-            self.ui.report_silver_measurement_complete(
-                port_name=port_name,
-                success=test_passed_successfully,
-                message=message_to_ui,
-                silver_sn=silver_sn_for_report,
-                measurement_id=new_measurement_id,
-                silver_results=self._simulated_results
-            )
-
-    # <-- MODIFIED
     @Slot(str, str, int)
     def handle_order_info(self, order_num: str, charge_num: str, quantity: int):
         logger.info(f"App: Received order info: Order='{order_num}', Charge='{charge_num}', Quantity={quantity}")
@@ -1505,7 +1531,6 @@ class DummyMainApp(QObject):
                 self.ports_remaining_in_order.add(initial_start_port)
                 self.current_processing_port = initial_start_port
                 self.ui.set_current_test_port(initial_start_port)
-                self.ui.update_port_status(initial_start_port, status="Pending")
                 self.ui.request_calibration_for_port(initial_start_port)
                 return
 
@@ -1633,6 +1658,19 @@ class DummyMainApp(QObject):
             QMessageBox.warning(self.ui, "UI Error", "Cannot prepare for retest scan. UI component missing. Please scan the SN manually.")
             self.ui.go_to_state("ScanAntennaSN") 
 
+    @Slot(str)
+    def handle_request_redo_golden(self, port_name: str):
+        logger.info(f"App: UI requested to re-do Golden measurement for port {port_name}")
+        self.current_processing_port = port_name
+        self.ui.set_current_test_port(port_name)
+
+        # Clear existing golden calibration data for this port if it exists
+        if "golden_measurements" in self.antenna_data and port_name in self.antenna_data["golden_measurements"]:
+            logger.info(f"App: Clearing previous golden calibration data for port {port_name}")
+            del self.antenna_data["golden_measurements"][port_name]
+        
+        # UI already goes to "ScanGolden", main app waits for golden_sample_scan_received signal
+
 
     @Slot(str)
     def do_antenna_measurement(self, port_name: str):
@@ -1698,201 +1736,16 @@ class DummyMainApp(QObject):
 
         self.ui.progress_bar.setMaximum(num_freq_points)
         self.ui.progress_bar.setValue(0)
-        self.freq_index = 0
         self._simulated_results = []
         self.ui._test_running = True
 
-        if self.current_measurement_timer and self.current_measurement_timer.isActive():
-            self.current_measurement_timer.stop()
-        self.current_measurement_timer = QTimer(self)
-        self.current_measurement_timer.timeout.connect(self._perform_antenna_measurement_step)
-        interval = 75 if self.hardware_demo_mode else 250 
-        self.current_measurement_timer.start(interval)
-
-    def _perform_antenna_measurement_step(self): 
-        port_name = self.current_processing_port
-        serial_number = self.current_antenna_sn
-
-        if not self.ui._test_running or not port_name or not serial_number or not self.antenna_data:
-             logger.warning(f"Antenna measurement step called in invalid state (Running: {self.ui._test_running}, Port: {port_name}, SN: {serial_number}). Aborting step.")
-             if self.current_measurement_timer: self.current_measurement_timer.stop()
-             self.current_measurement_timer = None
-             self.ui._test_running = False
-             return
-
-        limits_for_port = self.antenna_data.get("limits", {}).get(port_name, [])
-        num_freq_points = len(limits_for_port)
-        golden_meas_list = self.antenna_data.get("golden_measurements", {}).get(port_name, [])
-
-        if self.freq_index < num_freq_points:
-            current_limit_data = limits_for_port[self.freq_index]
-            target_freq_ghz_val = current_limit_data[0]
-            dut_lower_limit = current_limit_data[1]
-            dut_upper_limit = current_limit_data[2]
-            spec_gain_golden_sample = current_limit_data[3]
-
-            golden_sample_power_reading_dbm = golden_meas_list[self.freq_index]
-            if golden_sample_power_reading_dbm is None:
-                logger.error(f"Missing Golden measurement data point for DUT test at Freq Index {self.freq_index}, Port {port_name}, SN {serial_number}. Aborting DUT test.")
-                if self.current_measurement_timer: self.current_measurement_timer.stop()
-                self.ui._test_running = False
-                QMessageBox.critical(self.ui, "Data Error", "Golden measurement data point missing. Please re-run Golden Sample measurement.")
-                self.ui.go_to_state("ScanGoldenSN")
-                return
-
-            instrument_reading_dut_dbm: Optional[float] = None
-            actual_dut_gain_dbi: Optional[float] = None
-
-            if not self._is_hardware_ready(): # Simulation for DUT
-                logger.debug(f"DUT (Sim) SN {serial_number}, Port {port_name}, Freq Idx: {self.freq_index}, Target Freq: {target_freq_ghz_val} GHz")
-                FAIL_PROBABILITY_PER_TEST_POINT = 0.05
-                is_this_freq_point_failing = random.random() < FAIL_PROBABILITY_PER_TEST_POINT
-                
-                sim_actual_dut_gain_dbi = 0.0 # Placeholder for simulated gain
-                if is_this_freq_point_failing:
-                    # ... (simulation for failing point, sets sim_actual_dut_gain_dbi) ...
-                    spec_range_width = dut_upper_limit - dut_lower_limit
-                    failure_magnitude_offset = 0.0
-                    if spec_range_width > 0.1: failure_magnitude_offset = spec_range_width * random.uniform(0.1, 0.5)
-                    else: failure_magnitude_offset = random.uniform(0.2, 1.0)
-                    if random.random() < 0.5: sim_actual_dut_gain_dbi = dut_lower_limit - failure_magnitude_offset
-                    else: sim_actual_dut_gain_dbi = dut_upper_limit + failure_magnitude_offset
-                else:
-                    # ... (simulation for passing point, sets sim_actual_dut_gain_dbi) ...
-                    if dut_upper_limit > dut_lower_limit:
-                        target_gain_center = (dut_lower_limit + dut_upper_limit) / 2.0
-                        spec_half_width = (dut_upper_limit - dut_lower_limit) / 2.0; noise_factor_for_pass = 0.90
-                        random_deviation_from_center = random.uniform(-spec_half_width * noise_factor_for_pass, spec_half_width * noise_factor_for_pass)
-                        sim_actual_dut_gain_dbi = target_gain_center + random_deviation_from_center
-                    elif dut_upper_limit == dut_lower_limit: sim_actual_dut_gain_dbi = dut_lower_limit
-                    else: sim_actual_dut_gain_dbi = dut_lower_limit + random.uniform(-0.05, 0.05)
-                
-                actual_dut_gain_dbi = sim_actual_dut_gain_dbi
-                # Back-calculate what instrument would read for this simulated DUT gain
-                # CORRECTED CALCULATION (for simulation consistency, though the primary fix is below)
-                instrument_reading_dut_dbm = golden_sample_power_reading_dbm + (actual_dut_gain_dbi - spec_gain_golden_sample)
-
-            else: # Real hardware for DUT
-                logger.debug(f"DUT (HW) SN {serial_number}, Port {port_name}, Freq Idx: {self.freq_index}, Target Freq: {target_freq_ghz_val} GHz")
-                try:
-                    generator_freq_mhz = (target_freq_ghz_val * 1000) / self.multiplexing_factor
-                    
-                    logger.info(f"  Setting Gen: Freq={generator_freq_mhz:.4f} MHz, Pwr={self.transmitter_power} dBm")
-                    if not self.signal_generator_device.set_frequency(generator_freq_mhz):
-                        raise Exception(f"Failed to set generator frequency to {generator_freq_mhz} MHz")
-                    if not self.signal_generator_device.set_power(self.transmitter_power):
-                        raise Exception(f"Failed to set generator power to {self.transmitter_power} dBm")
-
-                    logger.info(f"  Setting PM: Freq={target_freq_ghz_val} GHz")
-                    if not self.power_meter.set_frequency(target_freq_ghz_val):
-                        raise Exception(f"Failed to set power meter frequency to {target_freq_ghz_val} GHz")
-                    
-                    self.signal_generator_device.rf_on()
-                    time.sleep(self.instrument_settling_time_s)
-
-                    instrument_reading_dut_dbm = self.power_meter.measure_power(wait_time=0.5)
-                    
-                    if instrument_reading_dut_dbm is None:
-                        raise Exception("Power meter returned None for DUT measurement.")
-                    
-                    # Calculate actual DUT gain based on real readings
-                    # --- THIS IS THE CORRECTED CALCULATION ---
-                    actual_dut_gain_dbi = spec_gain_golden_sample + (instrument_reading_dut_dbm - golden_sample_power_reading_dbm)
-
-                except Exception as e:
-                    self._handle_hardware_error("DUT Measurement Step", e, port_name=port_name, sn=serial_number)
-                    return 
-                finally:
-                    if self.signal_generator_device and self.signal_generator_device.is_rf_on:
-                        self.signal_generator_device.rf_off()
-                        logger.info("  Gen RF OFF")
-            
-            pass_status_for_point = "FAIL (Error)" 
-            if actual_dut_gain_dbi is not None and instrument_reading_dut_dbm is not None:
-                 pass_status_for_point = "PASS" if dut_lower_limit <= actual_dut_gain_dbi <= dut_upper_limit else "FAIL"
-            else: # Should have been caught by HW error handling
-                 logger.error(f"DUT measurement resulted in None for gain or power reading for SN {serial_number} at {target_freq_ghz_val} GHz.")
-
-
-            self._simulated_results.append({
-                "Frequency_GHz": target_freq_ghz_val,
-                "Antenna_Gain": actual_dut_gain_dbi if actual_dut_gain_dbi is not None else float('nan'),
-                "Lower_Limit": dut_lower_limit,
-                "Upper_Limit": dut_upper_limit,
-                "Pass": pass_status_for_point,
-                "Antenna_Measurement": instrument_reading_dut_dbm if instrument_reading_dut_dbm is not None else float('nan'),
-                "Golden_Measurement": golden_sample_power_reading_dbm, 
-                "Spec_Gain_Golden": spec_gain_golden_sample 
-            })
-
-            if self.ui.stacked_widget.currentWidget() == self.ui.test_page:
-                self.ui.update_measurement_progress(self.freq_index, target_freq_ghz_val, 
-                                                    actual_dut_gain_dbi if actual_dut_gain_dbi is not None else float('nan'),
-                                                    dut_lower_limit, dut_upper_limit)
-            self.freq_index += 1
-        else: # All frequency points processed
-            if self.current_measurement_timer: self.current_measurement_timer.stop()
-            self.current_measurement_timer = None
-            self.ui._test_running = False
-            logger.info(f"App: DUT Measurement {'simulation' if self.hardware_demo_mode or not self.hardware_initialized_successfully else 'hardware test'} complete for SN '{serial_number}', Port '{port_name}'")
-
-            overall_port_pass_status = "PASS" if all(res["Pass"] == "PASS" for res in self._simulated_results) else "FAIL"
-
-            retry_flag_value_for_report = self.is_current_test_a_no_count_retry
-
-            # Save results to database if not in demo mode
-            self._save_test_results_to_db(
-                port_name=port_name,
-                serial_number=serial_number,
-                results_list=self._simulated_results,
-                overall_status=overall_port_pass_status,
-                is_silver_test=False,
-                is_retry_no_count=retry_flag_value_for_report
-            )
-
-            if self.is_current_test_a_no_count_retry:
-                logger.info(f"App: Resetting is_current_test_a_no_count_retry flag from True to False after retest of {serial_number}.")
-                self.is_current_test_a_no_count_retry = False
-
-            if self.current_antenna_key and serial_number:
-                persistence_key_tuple_for_sn = (self.current_antenna_key, port_name)
-                if persistence_key_tuple_for_sn not in self.tested_sns_persistent:
-                    self.tested_sns_persistent[persistence_key_tuple_for_sn] = set()
-
-                if serial_number not in self.tested_sns_persistent[persistence_key_tuple_for_sn]:
-                    self.tested_sns_persistent[persistence_key_tuple_for_sn].add(serial_number)
-                    logger.info(f"App: Added SN '{serial_number}' to persistent set for {persistence_key_tuple_for_sn}. "
-                               f"Total for this key: {len(self.tested_sns_persistent[persistence_key_tuple_for_sn])}")
-                else:
-                    logger.info(f"App: SN '{serial_number}' was already in persistent set for {persistence_key_tuple_for_sn} (or this was a no-count retry completion).")
-            else:
-                logger.warning("current_antenna_key or serial_number not set. Cannot update tested_sns_persistent for DUT.")
-
-
-            new_measurement_id_for_dut = self.measurement_id_counter
-            self.measurement_id_counter += 1
-
-            failure_details_msg = ""
-            if overall_port_pass_status == "FAIL":
-                fail_details = []
-                for res_idx, res_item in enumerate(self._simulated_results):
-                    if res_item.get("Pass") != "PASS":
-                        fail_details.append(
-                            f"  Freq {res_item.get('Frequency_GHz', 'N/A')} GHz: "
-                            f"Measured Gain {res_item.get('Antenna_Gain', float('nan')):.2f} dBi "
-                            f"(Limits: {res_item.get('Lower_Limit', float('nan')):.2f} / {res_item.get('Upper_Limit', float('nan')):.2f} dBi)"
-                        )
-                failure_details_msg = "\n".join(fail_details)
-
-            self.ui.report_port_test_complete_for_antenna(
-                port_name=port_name,
-                serial_number=serial_number,
-                results=self._simulated_results, 
-                overall_port_status=overall_port_pass_status,
-                measurement_id=new_measurement_id_for_dut,
-                is_retry_no_count=retry_flag_value_for_report, 
-                failure_details_message=failure_details_msg
-            )
+        self._start_measurement_worker(
+            "antenna",
+            port_name=port_name,
+            serial_number=self.current_antenna_sn,
+            limits_for_port=limits_for_port,
+            golden_meas_list=golden_meas_list
+        )
 
     @Slot(str)
     def handle_port_batch_complete(self, completed_port_name: str):
@@ -1995,10 +1848,10 @@ class DummyMainApp(QObject):
     @Slot()
     def abort_current_action(self):
         logger.info("App: Abort signal received from UI. Stopping any active measurement and resetting app state.")
-        if self.current_measurement_timer and self.current_measurement_timer.isActive():
-            logger.info("App: Stopping active measurement timer due to abort.")
-            self.current_measurement_timer.stop()
-        self.current_measurement_timer = None
+        # Stop worker thread if active (worker handles RF-off internally)
+        if self._measurement_worker:
+            self._measurement_worker.request_abort()
+        self._cleanup_worker_thread()
         self.ui._test_running = False
 
         if self.current_processing_port and self.current_antenna_key:
@@ -2011,7 +1864,7 @@ class DummyMainApp(QObject):
         else:
             logger.info("ABORT: No current port/antenna context, cannot clear specific SNs.")
 
-        # Ensure RF is off if hardware was active
+        # Ensure RF is off if hardware was active (belt-and-suspenders after worker cleanup)
         if self.signal_generator_device and hasattr(self.signal_generator_device, 'is_rf_on') and self.signal_generator_device.is_rf_on:
             try:
                 logger.info("Aborting: Turning RF OFF on signal generator.")
@@ -2027,6 +1880,7 @@ class DummyMainApp(QObject):
         logger.info("App: Received request to cleanup and exit application.")
         self.save_persistent_data()
         self._shutdown_hardware() # Full hardware shutdown on application exit
+        self._cleanup_worker_thread() # Ensure worker thread is stopped
         logger.info("Persistent data saved (if enabled). Hardware shutdown. Application will now quit.")
 
         q_app_instance = QApplication.instance()
@@ -2056,8 +1910,27 @@ class DummyMainApp(QObject):
          self.current_silver_sn_validated = None
          self.current_antenna_config_filename = None 
          if self.current_measurement_timer and self.current_measurement_timer.isActive():
-             self.current_measurement_timer.stop()
+              self.current_measurement_timer.stop()
          self.current_measurement_timer = None
+         self._cleanup_worker_thread()
+
+    def _cleanup_worker_thread(self):
+        """Stops and cleans up the measurement worker thread if it's active."""
+        try:
+            if self._measurement_worker:
+                self._measurement_worker.request_abort()
+            if self._worker_thread and self._worker_thread.isRunning():
+                logger.info("Stopping active measurement worker thread.")
+                self._worker_thread.quit()
+                if not self._worker_thread.wait(3000):
+                    logger.warning("Measurement worker thread did not terminate gracefully, forcing termination.")
+                    self._worker_thread.terminate()
+                    self._worker_thread.wait(1000)
+        except RuntimeError:
+            # C++ object already deleted by deleteLater — safe to ignore
+            logger.debug("Worker thread C++ object already deleted, skipping cleanup.")
+        self._worker_thread = None
+        self._measurement_worker = None
 
     def _save_test_results_to_db(self, port_name: str, serial_number: str, results_list: List[Dict], overall_status: str, is_silver_test: bool, is_retry_no_count: bool):
         """

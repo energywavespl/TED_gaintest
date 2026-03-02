@@ -564,6 +564,7 @@ class UiMainWindow(QMainWindow):
     request_finish_measurements = Signal() # NEW: User clicked "FINISH MEASUREMENTS"
     abort_test_requested = Signal()
     request_retest_failed_unit = Signal(str, str) # NEW: port_name, serial_number for retest
+    request_redo_golden = Signal(str) # port_name: user wants to redo golden after silver fail
     # User management signals
     request_user_list_update = Signal() # Request main app reload users (after admin changes)
     request_login_change = Signal() # NEW: User wants to log in as someone else
@@ -2134,20 +2135,44 @@ class UiMainWindow(QMainWindow):
                  self._setup_input_area("ScanAntennaSN")
         else:
             fail_msg = f"Silver Sample validation FAILED for port {port_name}."
-            if message: # message now contains formatted failure details
-                fail_msg_title = f"Silver Validation Failed ({port_name})"
-                full_fail_msg = f"{fail_msg}\n\nDetails:\n{message}\n\nPlease check the Silver Sample and re-run the Silver measurement."
-                QMessageBox.critical(self, fail_msg_title, full_fail_msg)
-            else: # Fallback, should not happen if DummyApp provides details
-                QMessageBox.critical(self, f"Silver Validation Failed ({port_name})",
-                                     fail_msg + "\nPlease check the Silver Sample and re-run the Silver measurement.")
+            fail_msg_title = f"Silver Validation Failed ({port_name})"
+            
+            # Add more descriptive instructions
+            instructions = (
+                "The measured gain for the Silver Sample is outside the acceptable calibration limits.\n\n"
+                "• 'Re-do Silver': Re-seat the Silver Sample, check connections, and try measuring it again.\n"
+                "• 'Re-do Golden': If you suspect the initial Golden calibration was flawed, discard it and start over from the Golden Sample scan."
+            )
+            
+            if message:
+                full_fail_msg = f"{fail_msg}\n\nDetails:\n{message}\n\n{instructions}"
+            else:
+                full_fail_msg = f"{fail_msg}\n\n{instructions}"
 
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle(fail_msg_title)
+            msg_box.setText(full_fail_msg)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+
+            # Order matters: ActionRole (left side typically), AcceptRole/RejectRole (right side)
+            redo_silver_button = msg_box.addButton("Re-do Silver", QMessageBox.ButtonRole.ActionRole)
+            redo_golden_button = msg_box.addButton("Re-do Golden", QMessageBox.ButtonRole.AcceptRole)
+            msg_box.setDefaultButton(redo_golden_button)
+            msg_box.exec()
 
             self.update_status(f"Silver validation failed for {port_name}. Re-run needed.", "bad")
             self.update_port_status(port_name, status="Cal Failed")
             self._port_calibration_timestamps.pop(port_name, None)
             self.progress_bar.setValue(0)
-            self._setup_input_area("ScanSilver")
+
+            if msg_box.clickedButton() == redo_golden_button:
+                logger.info(f"UI: User chose to re-do Golden measurement for port {port_name}.")
+                self.clear_graph()
+                self._setup_input_area("ScanGolden")
+                self.request_redo_golden.emit(port_name)
+            else:
+                logger.info(f"UI: User chose to re-do Silver measurement for port {port_name}.")
+                self._setup_input_area("ScanSilver")
 
     @Slot(bool, bool, str, bool) # Added is_retest_flow parameter
     def report_antenna_sn_validation(self, valid, already_tested_on_this_port=False, message="", is_retest_flow=False):
