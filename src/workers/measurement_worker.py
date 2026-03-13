@@ -13,7 +13,11 @@ from typing import Optional, List, Dict, Any
 
 from PySide6.QtCore import QObject, Signal
 
+from src.instruments.Vaunix_LMS163_DSG import LMSTimeoutError
+
 logger = logging.getLogger("MeasurementWorker")
+
+MAX_HW_RETRIES = 2  # Number of reconnect attempts before giving up
 
 
 class MeasurementWorker(QObject):
@@ -74,6 +78,55 @@ class MeasurementWorker(QObject):
                 logger.info("  Gen RF OFF (worker)")
         except Exception as e:
             logger.error(f"Error turning RF off in worker: {e}")
+
+    def _do_hardware_step(self, generator_freq_mhz: float, target_freq_ghz: float) -> float:
+        """Execute one hardware measurement cycle (set freq/power, RF on, measure, RF off).
+
+        Automatically retries up to MAX_HW_RETRIES times on LMSTimeoutError
+        by reconnecting the signal generator.
+
+        Returns the measured power in dBm.
+        Raises Exception if all retries are exhausted or a non-timeout error occurs.
+        """
+        last_error = None
+        for attempt in range(1 + MAX_HW_RETRIES):
+            try:
+                if attempt > 0:
+                    logger.warning(f"  Retry attempt {attempt}/{MAX_HW_RETRIES} after reconnect")
+
+                logger.info(f"  Setting Gen: Freq={generator_freq_mhz:.4f} MHz, Pwr={self.transmitter_power} dBm")
+                if not self.signal_generator_device.set_frequency(generator_freq_mhz):
+                    raise Exception(f"Failed to set generator frequency to {generator_freq_mhz} MHz")
+                if not self.signal_generator_device.set_power(self.transmitter_power):
+                    raise Exception(f"Failed to set generator power to {self.transmitter_power} dBm")
+
+                logger.info(f"  Setting PM: Freq={target_freq_ghz} GHz")
+                if not self.power_meter.set_frequency(target_freq_ghz):
+                    raise Exception(f"Failed to set power meter frequency to {target_freq_ghz} GHz")
+
+                self.signal_generator_device.rf_on()
+                time.sleep(self.instrument_settling_time_s)
+
+                measured = self.power_meter.measure_power(wait_time=0.5)
+                return measured
+
+            except LMSTimeoutError as e:
+                last_error = e
+                self._ensure_rf_off()
+                logger.error(f"  Hardware timeout: {e}")
+                if attempt < MAX_HW_RETRIES:
+                    logger.info("  Attempting signal generator reconnect...")
+                    if self.signal_generator_device.reconnect():
+                        logger.info("  Reconnect successful, retrying measurement step")
+                        continue
+                    else:
+                        raise Exception(f"Signal generator reconnect failed after timeout: {e}")
+                else:
+                    raise Exception(
+                        f"Signal generator not responding after {MAX_HW_RETRIES} reconnect attempts: {e}"
+                    )
+            finally:
+                self._ensure_rf_off()
 
     # --- Configuration methods (call from main thread BEFORE starting) ---
 
@@ -178,28 +231,10 @@ class MeasurementWorker(QObject):
                 logger.debug(f"Golden (HW) Freq Idx: {idx}, Target Freq: {target_freq_ghz} GHz")
                 try:
                     generator_freq_mhz = (target_freq_ghz * 1000) / self.multiplexing_factor
-
-                    logger.info(f"  Setting Gen: Freq={generator_freq_mhz:.4f} MHz, Pwr={self.transmitter_power} dBm")
-                    if not self.signal_generator_device.set_frequency(generator_freq_mhz):
-                        raise Exception(f"Failed to set generator frequency to {generator_freq_mhz} MHz")
-                    if not self.signal_generator_device.set_power(self.transmitter_power):
-                        raise Exception(f"Failed to set generator power to {self.transmitter_power} dBm")
-
-                    logger.info(f"  Setting PM: Freq={target_freq_ghz} GHz")
-                    if not self.power_meter.set_frequency(target_freq_ghz):
-                        raise Exception(f"Failed to set power meter frequency to {target_freq_ghz} GHz")
-
-                    self.signal_generator_device.rf_on()
-                    time.sleep(self.instrument_settling_time_s)
-
-                    measured_power_dbm = self.power_meter.measure_power(wait_time=0.5)
-
+                    measured_power_dbm = self._do_hardware_step(generator_freq_mhz, target_freq_ghz)
                 except Exception as e:
-                    self._ensure_rf_off()
                     self.error_occurred.emit("Golden Measurement Step", str(e))
                     return
-                finally:
-                    self._ensure_rf_off()
 
                 if measured_power_dbm is None:
                     self.error_occurred.emit("Golden Measurement (No PM Value)", "Power Meter returned no value")
@@ -259,21 +294,7 @@ class MeasurementWorker(QObject):
                 logger.debug(f"Silver (HW) Freq Idx: {idx}, Target Freq: {target_freq_ghz} GHz")
                 try:
                     generator_freq_mhz = (target_freq_ghz * 1000) / self.multiplexing_factor
-
-                    logger.info(f"  Setting Gen: Freq={generator_freq_mhz:.4f} MHz, Pwr={self.transmitter_power} dBm")
-                    if not self.signal_generator_device.set_frequency(generator_freq_mhz):
-                        raise Exception(f"Failed to set generator frequency to {generator_freq_mhz} MHz")
-                    if not self.signal_generator_device.set_power(self.transmitter_power):
-                        raise Exception(f"Failed to set generator power to {self.transmitter_power} dBm")
-
-                    logger.info(f"  Setting PM: Freq={target_freq_ghz} GHz")
-                    if not self.power_meter.set_frequency(target_freq_ghz):
-                        raise Exception(f"Failed to set power meter frequency to {target_freq_ghz} GHz")
-
-                    self.signal_generator_device.rf_on()
-                    time.sleep(self.instrument_settling_time_s)
-
-                    instrument_reading_for_silver_dbm = self.power_meter.measure_power(wait_time=0.5)
+                    instrument_reading_for_silver_dbm = self._do_hardware_step(generator_freq_mhz, target_freq_ghz)
 
                     if instrument_reading_for_silver_dbm is None:
                         raise Exception("Power meter returned None for Silver measurement.")
@@ -281,11 +302,8 @@ class MeasurementWorker(QObject):
                     actual_measured_silver_gain = spec_gain_golden_val + (instrument_reading_for_silver_dbm - golden_meas_dbm_val)
 
                 except Exception as e:
-                    self._ensure_rf_off()
                     self.error_occurred.emit("Silver Measurement Step", str(e))
                     return
-                finally:
-                    self._ensure_rf_off()
 
             # Compute pass/fail for silver
             silver_gain_validation_ll = silver_gain_horn_target - silver_tolerance_pm
@@ -383,21 +401,7 @@ class MeasurementWorker(QObject):
                 logger.debug(f"DUT (HW) SN {serial_number}, Port {port_name}, Freq Idx: {idx}, Target Freq: {target_freq_ghz_val} GHz")
                 try:
                     generator_freq_mhz = (target_freq_ghz_val * 1000) / self.multiplexing_factor
-
-                    logger.info(f"  Setting Gen: Freq={generator_freq_mhz:.4f} MHz, Pwr={self.transmitter_power} dBm")
-                    if not self.signal_generator_device.set_frequency(generator_freq_mhz):
-                        raise Exception(f"Failed to set generator frequency to {generator_freq_mhz} MHz")
-                    if not self.signal_generator_device.set_power(self.transmitter_power):
-                        raise Exception(f"Failed to set generator power to {self.transmitter_power} dBm")
-
-                    logger.info(f"  Setting PM: Freq={target_freq_ghz_val} GHz")
-                    if not self.power_meter.set_frequency(target_freq_ghz_val):
-                        raise Exception(f"Failed to set power meter frequency to {target_freq_ghz_val} GHz")
-
-                    self.signal_generator_device.rf_on()
-                    time.sleep(self.instrument_settling_time_s)
-
-                    instrument_reading_dut_dbm = self.power_meter.measure_power(wait_time=0.5)
+                    instrument_reading_dut_dbm = self._do_hardware_step(generator_freq_mhz, target_freq_ghz_val)
 
                     if instrument_reading_dut_dbm is None:
                         raise Exception("Power meter returned None for DUT measurement.")
@@ -405,11 +409,8 @@ class MeasurementWorker(QObject):
                     actual_dut_gain_dbi = spec_gain_golden_sample + (instrument_reading_dut_dbm - golden_sample_power_reading_dbm)
 
                 except Exception as e:
-                    self._ensure_rf_off()
                     self.error_occurred.emit("DUT Measurement Step", str(e))
                     return
-                finally:
-                    self._ensure_rf_off()
 
             # Compute pass/fail
             pass_status_for_point = "FAIL (Error)"

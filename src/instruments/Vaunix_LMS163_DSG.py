@@ -29,6 +29,7 @@ from ctypes import cdll, c_int
 import logging
 import os
 import platform
+import threading
 
 # Set up logging
 # logging.basicConfig(
@@ -74,13 +75,22 @@ class LMSError(Exception):
         super().__init__(message)
 
 
+class LMSTimeoutError(LMSError):
+    """Raised when a DLL call to the LMS device does not return within the timeout period."""
+    def __init__(self, function_name, timeout_s):
+        self.timeout_s = timeout_s
+        super().__init__(0, function_name)
+        self.args = (f"{function_name} did not respond within {timeout_s}s — possible hardware hang",)
+
+
 class LMS163Device:
     """Class representing a single LMS-163 device"""
-    
-    def __init__(self, device_id, dll):
+
+    def __init__(self, device_id, dll, dll_timeout_s: float = 5.0):
         """Initialize a device with the given ID and DLL reference"""
         self.device_id = device_id
         self.dll = dll
+        self.dll_timeout_s = dll_timeout_s
         self.is_initialized = False
         self.is_rf_on = False
         self._init_device()
@@ -103,6 +113,35 @@ class LMS163Device:
         self.is_initialized = True
         logger.info(f"Device {self.device_id} initialized")
     
+    def _call_with_timeout(self, func, args, func_name):
+        """Run a DLL function in a daemon thread with a timeout.
+
+        If the call does not return within ``self.dll_timeout_s`` seconds,
+        raises ``LMSTimeoutError``.  The orphaned daemon thread will be
+        cleaned up when the process exits.
+        """
+        result_holder = [None]
+        exception_holder = [None]
+
+        def _target():
+            try:
+                result_holder[0] = func(*args)
+            except Exception as exc:
+                exception_holder[0] = exc
+
+        t = threading.Thread(target=_target, daemon=True)
+        t.start()
+        t.join(timeout=self.dll_timeout_s)
+
+        if t.is_alive():
+            logger.error(f"{func_name}: DLL call did not return within {self.dll_timeout_s}s")
+            raise LMSTimeoutError(func_name, self.dll_timeout_s)
+
+        if exception_holder[0] is not None:
+            raise exception_holder[0]
+
+        return result_holder[0]
+
     def _get_min_freq_mhz(self):
         """Get the minimum frequency in MHz"""
         min_freq = self.dll.fnLMS_GetMinFreq(self.device_id)
@@ -150,7 +189,9 @@ class LMS163Device:
         # Convert MHz to device units (0.01 Hz)
         frequency_device_units = int(frequency_mhz * 1000000 / 10)
         
-        result = self.dll.fnLMS_SetFrequency(self.device_id, frequency_device_units)
+        result = self._call_with_timeout(
+            self.dll.fnLMS_SetFrequency, (self.device_id, frequency_device_units), "SetFrequency"
+        )
         if result != 0:
             raise LMSError(result, "SetFrequency")
         
@@ -196,7 +237,9 @@ class LMS163Device:
         # Convert dBm to device units (0.25 dBm steps)
         power_device_units = int(power_dbm / 0.25)
         
-        result = self.dll.fnLMS_SetPowerLevel(self.device_id, power_device_units)
+        result = self._call_with_timeout(
+            self.dll.fnLMS_SetPowerLevel, (self.device_id, power_device_units), "SetPowerLevel"
+        )
         if result != 0:
             raise LMSError(result, "SetPowerLevel")
         
@@ -248,8 +291,10 @@ class LMS163Device:
         """Turn on the RF output"""
         if not self.is_initialized:
             raise LMSError(1, "Device not initialized")
-            
-        result = self.dll.fnLMS_SetRFOn(self.device_id, 1)
+
+        result = self._call_with_timeout(
+            self.dll.fnLMS_SetRFOn, (self.device_id, 1), "SetRFOn"
+        )
         if result != 0:
             raise LMSError(result, "SetRFOn")
         self.is_rf_on = True
@@ -259,13 +304,46 @@ class LMS163Device:
         """Turn off the RF output"""
         if not self.is_initialized:
             raise LMSError(1, "Device not initialized")
-            
-        result = self.dll.fnLMS_SetRFOn(self.device_id, 0)
+
+        result = self._call_with_timeout(
+            self.dll.fnLMS_SetRFOn, (self.device_id, 0), "SetRFOff"
+        )
         if result != 0:
             raise LMSError(result, "SetRFOn")
         self.is_rf_on = False
         logger.info("RF output disabled")
     
+    def reconnect(self):
+        """Close and reinitialize the device after a timeout or hardware error.
+
+        Returns True on success, False if reconnection failed.
+        """
+        logger.info(f"Attempting to reconnect device {self.device_id}...")
+        try:
+            self.is_rf_on = False
+            # Try to close (may also hang, so use timeout)
+            try:
+                self._call_with_timeout(
+                    self.dll.fnLMS_CloseDevice, (self.device_id,), "CloseDevice(reconnect)"
+                )
+            except (LMSTimeoutError, LMSError):
+                logger.warning("CloseDevice timed out during reconnect — proceeding with reinit")
+            self.is_initialized = False
+
+            # Reinitialize
+            result = self._call_with_timeout(
+                self.dll.fnLMS_InitDevice, (self.device_id,), "InitDevice(reconnect)"
+            )
+            if result != 0:
+                raise LMSError(result, "InitDevice(reconnect)")
+            self.is_initialized = True
+            logger.info(f"Device {self.device_id} reconnected successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Reconnect failed for device {self.device_id}: {e}")
+            self.is_initialized = False
+            return False
+
     def close(self):
         """Close the device when finished"""
         if self.is_initialized:
