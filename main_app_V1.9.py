@@ -253,7 +253,7 @@ class DummyMainApp(QObject):
                 "then set 'Database_Demo' to FALSE in the 'Database' sheet, "
                 "provide valid connection details, and restart the application."
             ))
-        self.tested_sns_persistent: Dict[tuple[str,str], set[str]] = {}
+        self.tested_sns_persistent: Dict[tuple[str,str,Optional[str]], set[str]] = {}
         self.order_history_status: Dict[str, Dict[str,str]] = {}
 
         if self.persistent_memory_enabled:
@@ -1233,8 +1233,17 @@ class DummyMainApp(QObject):
         if "golden_measurements" not in self.antenna_data:
             self.antenna_data["golden_measurements"] = {}
 
-        self.antenna_data["golden_measurements"][port_name] = [res["Antenna_Measurement"] for res in results]
+        golden_values = [res["Antenna_Measurement"] for res in results]
+        self.antenna_data["golden_measurements"][port_name] = golden_values
         logger.info(f"App: Stored {len(results)} Golden dBm values for {port_name}.")
+
+        # Diagnostic statistics for golden reference values (aids negative-gain investigation)
+        if golden_values:
+            logger.info(
+                f"App: Golden reference stats for {port_name}: "
+                f"min={min(golden_values):.2f} dBm, max={max(golden_values):.2f} dBm, "
+                f"mean={sum(golden_values)/len(golden_values):.2f} dBm"
+            )
 
         self.ui.report_golden_measurement_complete(port_name, success=True)
 
@@ -1300,7 +1309,7 @@ class DummyMainApp(QObject):
             self.is_current_test_a_no_count_retry = False
 
         if self.current_antenna_key and serial_number:
-            persistence_key_tuple = (self.current_antenna_key, port_name)
+            persistence_key_tuple = (self.current_antenna_key, port_name, self.order_number)
             if persistence_key_tuple not in self.tested_sns_persistent:
                 self.tested_sns_persistent[persistence_key_tuple] = set()
             if serial_number not in self.tested_sns_persistent[persistence_key_tuple]:
@@ -1515,7 +1524,7 @@ class DummyMainApp(QObject):
                 logger.info(f"App: User chose to test port '{initial_start_port}' again for order '{order_num}'.")
 
                 if self.current_antenna_key:
-                    persistence_key_to_clear = (self.current_antenna_key, initial_start_port)
+                    persistence_key_to_clear = (self.current_antenna_key, initial_start_port, self.order_number)
                     if persistence_key_to_clear in self.tested_sns_persistent:
                         logger.info(f"App: Clearing previously tested SNs for {persistence_key_to_clear} due to 'Test Again' on order port.")
                         self.tested_sns_persistent[persistence_key_to_clear].clear()
@@ -1603,7 +1612,7 @@ class DummyMainApp(QObject):
         else: 
             self.current_antenna_sn = scanned_sn 
             if self.current_antenna_key:
-                persistence_key_tuple = (self.current_antenna_key, port_name)
+                persistence_key_tuple = (self.current_antenna_key, port_name, self.order_number)
                 sns_tested_for_this_specific_config = self.tested_sns_persistent.get(persistence_key_tuple, set())
                 if scanned_sn in sns_tested_for_this_specific_config:
                     report_as_already_tested_for_ui_dialog = True
@@ -1855,7 +1864,7 @@ class DummyMainApp(QObject):
         self.ui._test_running = False
 
         if self.current_processing_port and self.current_antenna_key:
-            persistence_key = (self.current_antenna_key, self.current_processing_port)
+            persistence_key = (self.current_antenna_key, self.current_processing_port, self.order_number)
             if persistence_key in self.tested_sns_persistent:
                 logger.warning(f"ABORT: Clearing all previously tested SNs for port '{self.current_processing_port}' on antenna config '{self.current_antenna_key}'.")
                 self.tested_sns_persistent[persistence_key].clear()
@@ -2061,7 +2070,19 @@ class DummyMainApp(QObject):
                 with open(sn_persistence_file, "rb") as f_sn:
                     loaded_sns = pickle.load(f_sn)
                     if isinstance(loaded_sns, dict):
-                        self.tested_sns_persistent = loaded_sns
+                        # Migrate old 2-tuple keys to 3-tuple keys with '__LEGACY__' sentinel
+                        # so they don't interfere with new order-scoped lookups.
+                        migrated_sns = {}
+                        migration_count = 0
+                        for key, value in loaded_sns.items():
+                            if isinstance(key, tuple) and len(key) == 2:
+                                migrated_sns[(key[0], key[1], "__LEGACY__")] = value
+                                migration_count += 1
+                            else:
+                                migrated_sns[key] = value
+                        self.tested_sns_persistent = migrated_sns
+                        if migration_count > 0:
+                            logger.info(f"App: Migrated {migration_count} old 2-tuple persistence keys to 3-tuple format (order='__LEGACY__').")
                         logger.info(f"App: Loaded {len(self.tested_sns_persistent)} persistent SN entries from {sn_persistence_file}.")
                     else:
                         logger.error(f"Corrupt or incompatible data in {sn_persistence_file}. Expected dict, got {type(loaded_sns)}. Initializing empty SN persistence.")

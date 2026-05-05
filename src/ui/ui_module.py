@@ -3303,7 +3303,7 @@ if __name__ == '__main__':
                 if clicked_button == test_again_button:
                     logger.info(f"DummyApp: User chose to test port '{initial_start_port}' again.")
                     
-                    persistence_key_to_clear = (self.current_antenna_key, initial_start_port)
+                    persistence_key_to_clear = (self.current_antenna_key, initial_start_port, self.order_number)
                     if persistence_key_to_clear in self.tested_sns_persistent:
                         logger.info(f"DummyApp: Clearing previously tested SNs for {persistence_key_to_clear} due to 'Test Again' on order port.")
                         self.tested_sns_persistent[persistence_key_to_clear].clear()
@@ -3408,7 +3408,7 @@ if __name__ == '__main__':
                     is_valid_for_proceeding = False
             else: # Normal scan flow (not a retest-due-to-failure)
                 self.current_antenna_sn = scanned_sn # Update current_antenna_sn with the newly scanned one
-                persistence_key = (self.current_antenna_key, port_name)
+                persistence_key = (self.current_antenna_key, port_name, self.order_number)
                 sns_tested_for_this_port = self.tested_sns_persistent.get(persistence_key, set())
                 report_as_already_tested_for_ui_dialog = scanned_sn in sns_tested_for_this_port
                 is_valid_for_proceeding = True # Format is good, it's a valid SN to consider
@@ -3603,7 +3603,7 @@ if __name__ == '__main__':
 
                 # Persist that this SN was tested on this port for this antenna type/orientation
                 # This happens regardless of retry, as it's a record of a test attempt.
-                persistence_key = (self.current_antenna_key, port_name)
+                persistence_key = (self.current_antenna_key, port_name, self.order_number)
                 if persistence_key not in self.tested_sns_persistent:
                     self.tested_sns_persistent[persistence_key] = set()
                 self.tested_sns_persistent[persistence_key].add(serial_number)
@@ -3718,7 +3718,7 @@ if __name__ == '__main__':
                 self.current_measurement_timer = None
 
             if self.current_processing_port and self.current_antenna_key:
-                persistence_key = (self.current_antenna_key, self.current_processing_port)
+                persistence_key = (self.current_antenna_key, self.current_processing_port, self.order_number)
                 if persistence_key in self.tested_sns_persistent:
                     logger.warning(f"ABORT: Clearing all previously tested SNs for port '{self.current_processing_port}' on antenna config '{self.current_antenna_key}'.")
                     self.tested_sns_persistent[persistence_key].clear()
@@ -3783,7 +3783,19 @@ if __name__ == '__main__':
 
                 if os.path.exists(sn_path):
                     with open(sn_path, "rb") as f_sn:
-                        self.tested_sns_persistent = pickle.load(f_sn)
+                        loaded_sns = pickle.load(f_sn)
+                        # Migrate old 2-tuple keys to 3-tuple keys with '__LEGACY__' sentinel
+                        migrated_sns = {}
+                        migration_count = 0
+                        for key, value in loaded_sns.items():
+                            if isinstance(key, tuple) and len(key) == 2:
+                                migrated_sns[(key[0], key[1], "__LEGACY__")] = value
+                                migration_count += 1
+                            else:
+                                migrated_sns[key] = value
+                        self.tested_sns_persistent = migrated_sns
+                        if migration_count > 0:
+                            logger.info(f"DummyApp: Migrated {migration_count} old 2-tuple persistence keys to 3-tuple format.")
                         logger.info(f"DummyApp: Loaded {len(self.tested_sns_persistent)} persistent SN entries.")
                 else:
                     logger.info(f"DummyApp: No persistent SN file found at {sn_path}.")

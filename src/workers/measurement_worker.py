@@ -311,6 +311,14 @@ class MeasurementWorker(QObject):
             pass_status = "FAIL"
             if actual_measured_silver_gain is not None:
                 pass_status = "PASS" if silver_gain_validation_ll <= actual_measured_silver_gain <= silver_gain_validation_ul else "FAIL"
+                # Anomaly detection: warn if silver gain is negative (unexpected)
+                if actual_measured_silver_gain < 0:
+                    logger.warning(
+                        f"ANOMALY: Negative Silver gain {actual_measured_silver_gain:.2f} dBi at {target_freq_ghz} GHz. "
+                        f"P_silver={instrument_reading_for_silver_dbm:.2f} dBm, P_golden={golden_meas_dbm_val:.2f} dBm, "
+                        f"Spec_Gain_Golden={spec_gain_golden_val:.2f} dBi, "
+                        f"Delta={instrument_reading_for_silver_dbm - golden_meas_dbm_val:.2f} dB"
+                    )
 
             step_data = {
                 "Frequency_GHz": target_freq_ghz,
@@ -416,6 +424,15 @@ class MeasurementWorker(QObject):
             pass_status_for_point = "FAIL (Error)"
             if actual_dut_gain_dbi is not None and instrument_reading_dut_dbm is not None:
                 pass_status_for_point = "PASS" if dut_lower_limit <= actual_dut_gain_dbi <= dut_upper_limit else "FAIL"
+                # Anomaly detection: warn if DUT gain is negative (unexpected for antenna measurements)
+                if actual_dut_gain_dbi < 0:
+                    logger.warning(
+                        f"ANOMALY: Negative DUT gain {actual_dut_gain_dbi:.2f} dBi at {target_freq_ghz_val} GHz "
+                        f"for SN '{serial_number}' on port '{port_name}'. "
+                        f"P_dut={instrument_reading_dut_dbm:.2f} dBm, P_golden={golden_sample_power_reading_dbm:.2f} dBm, "
+                        f"Spec_Gain_Golden={spec_gain_golden_sample:.2f} dBi, "
+                        f"Delta(P_dut-P_golden)={instrument_reading_dut_dbm - golden_sample_power_reading_dbm:.2f} dB"
+                    )
 
             step_data = {
                 "Frequency_GHz": target_freq_ghz_val,
